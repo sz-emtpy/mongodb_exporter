@@ -1,5 +1,5 @@
-# github.com/AlekSi/pointer v1.1.0
-## explicit; go 1.11
+# github.com/AlekSi/pointer v1.2.0
+## explicit; go 1.18
 github.com/AlekSi/pointer
 # github.com/StackExchange/wmi v1.2.1
 ## explicit; go 1.13
