@@ -16,7 +16,7 @@ const (
 // Help flag.
 type helpValue bool
 
-func (h helpValue) BeforeApply(ctx *Context) error {
+func (h helpValue) BeforeReset(ctx *Context) error {
 	options := ctx.Kong.helpOptions
 	options.Summary = false
 	err := ctx.Kong.help(options, ctx)
@@ -51,6 +51,11 @@ type HelpOptions struct {
 
 	// Don't show the help associated with subcommands
 	NoExpandSubcommands bool
+
+	// Clamp the help wrap width to a value smaller than the terminal width.
+	// If this is set to a non-positive number, the terminal width is used; otherwise,
+	// the min of this value or the terminal width is used.
+	WrapUpperBound int
 }
 
 // Apply options to Kong as a configuration option.
@@ -81,10 +86,10 @@ type HelpValueFormatter func(value *Value) string
 
 // DefaultHelpValueFormatter is the default HelpValueFormatter.
 func DefaultHelpValueFormatter(value *Value) string {
-	if value.Tag.Env == "" {
+	if len(value.Tag.Envs) == 0 || HasInterpolatedVar(value.OrigHelp, "env") {
 		return value.Help
 	}
-	suffix := "($" + value.Tag.Env + ")"
+	suffix := "(" + formatEnvs(value.Tag.Envs) + ")"
 	switch {
 	case strings.HasSuffix(value.Help, "."):
 		return value.Help[:len(value.Help)-1] + " " + suffix + "."
@@ -367,9 +372,13 @@ type helpWriter struct {
 
 func newHelpWriter(ctx *Context, options HelpOptions) *helpWriter {
 	lines := []string{}
+	wrapWidth := guessWidth(ctx.Stdout)
+	if options.WrapUpperBound > 0 && wrapWidth > options.WrapUpperBound {
+		wrapWidth = options.WrapUpperBound
+	}
 	w := &helpWriter{
 		indent:        "",
-		width:         guessWidth(ctx.Stdout),
+		width:         wrapWidth,
 		lines:         &lines,
 		helpFormatter: ctx.Kong.helpFormatter,
 		HelpOptions:   options,
@@ -481,28 +490,24 @@ func formatFlag(haveShort bool, flag *Flag) string {
 	flagString := ""
 	name := flag.Name
 	isBool := flag.IsBool()
+	isCounter := flag.IsCounter()
+
+	short := ""
 	if flag.Short != 0 {
-		if isBool && flag.Tag.Negatable {
-			flagString += fmt.Sprintf("-%c, --[no-]%s", flag.Short, name)
-		} else {
-			flagString += fmt.Sprintf("-%c, --%s", flag.Short, name)
-		}
-	} else {
-		if isBool && flag.Tag.Negatable {
-			if haveShort {
-				flagString = fmt.Sprintf("    --[no-]%s", name)
-			} else {
-				flagString = fmt.Sprintf("--[no-]%s", name)
-			}
-		} else {
-			if haveShort {
-				flagString += fmt.Sprintf("    --%s", name)
-			} else {
-				flagString += fmt.Sprintf("--%s", name)
-			}
-		}
+		short = "-" + string(flag.Short) + ", "
+	} else if haveShort {
+		short = "    "
 	}
-	if !isBool {
+
+	if isBool && flag.Tag.Negatable == negatableDefault {
+		name = "[no-]" + name
+	} else if isBool && flag.Tag.Negatable != "" {
+		name += "/" + flag.Tag.Negatable
+	}
+
+	flagString += fmt.Sprintf("%s--%s", short, name)
+
+	if !isBool && !isCounter {
 		flagString += fmt.Sprintf("=%s", flag.FormatPlaceHolder())
 	}
 	return flagString
@@ -530,6 +535,9 @@ func (h *HelpOptions) CommandTree(node *Node, prefix string) (rows [][2]string) 
 		rows = append(rows, [2]string{prefix + arg.Summary(), arg.Help})
 	}
 	for _, subCmd := range node.Children {
+		if subCmd.Hidden {
+			continue
+		}
 		rows = append(rows, h.CommandTree(subCmd, prefix)...)
 	}
 	return
@@ -554,4 +562,13 @@ func TreeIndenter(prefix string) string {
 		return "|- "
 	}
 	return "|" + strings.Repeat(" ", defaultIndent) + prefix
+}
+
+func formatEnvs(envs []string) string {
+	formatted := make([]string, len(envs))
+	for i := range envs {
+		formatted[i] = "$" + envs[i]
+	}
+
+	return strings.Join(formatted, ", ")
 }
