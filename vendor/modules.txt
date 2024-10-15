@@ -102,8 +102,8 @@ github.com/shirou/gopsutil/process
 # github.com/sirupsen/logrus v1.8.1
 ## explicit; go 1.13
 github.com/sirupsen/logrus
-# github.com/stretchr/testify v1.7.0
-## explicit; go 1.13
+# github.com/stretchr/testify v1.9.0
+## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
 # github.com/tklauser/go-sysconf v0.3.9
@@ -224,6 +224,6 @@ gopkg.in/mgo.v2/internal/json
 # gopkg.in/yaml.v2 v2.4.0
 ## explicit; go 1.15
 gopkg.in/yaml.v2
-# gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
+# gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
