@@ -7,8 +7,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
 // A Visitable component in the model.
@@ -41,19 +39,22 @@ const (
 
 // Node is a branch in the CLI. ie. a command or positional argument.
 type Node struct {
-	Type       NodeType
-	Parent     *Node
-	Name       string
-	Help       string // Short help displayed in summaries.
-	Detail     string // Detailed help displayed when describing command/arg alone.
-	Group      *Group
-	Hidden     bool
-	Flags      []*Flag
-	Positional []*Positional
-	Children   []*Node
-	Target     reflect.Value // Pointer to the value in the grammar that this Node is associated with.
-	Tag        *Tag
-	Aliases    []string
+	Type        NodeType
+	Parent      *Node
+	Name        string
+	Help        string // Short help displayed in summaries.
+	Detail      string // Detailed help displayed when describing command/arg alone.
+	Group       *Group
+	Hidden      bool
+	Flags       []*Flag
+	Positional  []*Positional
+	Children    []*Node
+	DefaultCmd  *Node
+	Target      reflect.Value // Pointer to the value in the grammar that this Node is associated with.
+	Tag         *Tag
+	Aliases     []string
+	Passthrough bool // Set to true to stop flag parsing when encountered.
+	Active      bool // Denotes the node is part of an active branch in the CLI.
 
 	Argument *Value // Populated when Type is ArgumentNode.
 }
@@ -98,6 +99,7 @@ func (n *Node) AllFlags(hide bool) (out [][]*Flag) {
 	group := []*Flag{}
 	for _, flag := range n.Flags {
 		if !hide || !flag.Hidden {
+			flag.Active = true
 			group = append(group, flag)
 		}
 	}
@@ -160,6 +162,16 @@ func (n *Node) Summary() string {
 	} else if len(n.Children) > 0 {
 		summary += " <command>"
 	}
+	allFlags := n.Flags
+	if n.Parent != nil {
+		allFlags = append(allFlags, n.Parent.Flags...)
+	}
+	for _, flag := range allFlags {
+		if !flag.Required {
+			summary += " [flags]"
+			break
+		}
+	}
 	return summary
 }
 
@@ -203,8 +215,12 @@ func (n *Node) Path() (out string) {
 	switch n.Type {
 	case CommandNode:
 		out += " " + n.Name
+		if len(n.Aliases) > 0 {
+			out += fmt.Sprintf(" (%s)", strings.Join(n.Aliases, ","))
+		}
 	case ArgumentNode:
 		out += " " + "<" + n.Name + ">"
+	default:
 	}
 	return strings.TrimSpace(out)
 }
@@ -226,6 +242,8 @@ type Value struct {
 	Flag         *Flag // Nil if positional argument.
 	Name         string
 	Help         string
+	OrigHelp     string // Original help string, without interpolated variables.
+	HasDefault   bool
 	Default      string
 	DefaultValue reflect.Value
 	Enum         string
@@ -237,6 +255,7 @@ type Value struct {
 	Format       string // Formatting directive, if applicable.
 	Position     int    // Position (for positional arguments).
 	Passthrough  bool   // Set to true to stop flag parsing when encountered.
+	Active       bool   // Denotes the value is part of an active branch in the CLI.
 }
 
 // EnumMap returns a map of the enums in this value.
@@ -245,6 +264,16 @@ func (v *Value) EnumMap() map[string]bool {
 	out := make(map[string]bool, len(parts))
 	for _, part := range parts {
 		out[strings.TrimSpace(part)] = true
+	}
+	return out
+}
+
+// EnumSlice returns a slice of the enums in this value.
+func (v *Value) EnumSlice() []string {
+	parts := strings.Split(v.Enum, ",")
+	out := make([]string, len(parts))
+	for i, part := range parts {
+		out[i] = strings.TrimSpace(part)
 	}
 	return out
 }
@@ -299,6 +328,9 @@ func (v *Value) IsMap() bool {
 
 // IsBool returns true if the underlying value is a boolean.
 func (v *Value) IsBool() bool {
+	if m, ok := v.Mapper.(BoolMapperExt); ok && m.IsBoolFromValue(v.Target) {
+		return true
+	}
 	if m, ok := v.Mapper.(BoolMapper); ok && m.IsBool() {
 		return true
 	}
@@ -312,19 +344,12 @@ func (v *Value) IsCounter() bool {
 
 // Parse tokens into value, parse, and validate, but do not write to the field.
 func (v *Value) Parse(scan *Scanner, target reflect.Value) (err error) {
-	defer func() {
-		if rerr := recover(); rerr != nil {
-			switch rerr := rerr.(type) {
-			case Error:
-				err = errors.Wrap(rerr, v.ShortSummary())
-			default:
-				panic(fmt.Sprintf("mapper %T failed to apply to %s: %s", v.Mapper, v.Summary(), rerr))
-			}
-		}
-	}()
+	if target.Kind() == reflect.Ptr && target.IsNil() {
+		target.Set(reflect.New(target.Type().Elem()))
+	}
 	err = v.Mapper.Decode(&DecodeContext{Value: v, Scan: scan}, target)
 	if err != nil {
-		return errors.Wrap(err, v.ShortSummary())
+		return fmt.Errorf("%s: %w", v.ShortSummary(), err)
 	}
 	v.Set = true
 	return nil
@@ -351,17 +376,20 @@ func (v *Value) ApplyDefault() error {
 // Does not include resolvers.
 func (v *Value) Reset() error {
 	v.Target.Set(reflect.Zero(v.Target.Type()))
-	if v.Tag.Env != "" {
-		envar := os.Getenv(v.Tag.Env)
-		if envar != "" {
-			err := v.Parse(ScanFromTokens(Token{Type: FlagValueToken, Value: envar}), v.Target)
-			if err != nil {
-				return fmt.Errorf("%s (from envar %s=%q)", err, v.Tag.Env, envar)
+	if len(v.Tag.Envs) != 0 {
+		for _, env := range v.Tag.Envs {
+			envar, ok := os.LookupEnv(env)
+			// Parse the first non-empty ENV in the list
+			if ok {
+				err := v.Parse(ScanFromTokens(Token{Type: FlagValueToken, Value: envar}), v.Target)
+				if err != nil {
+					return fmt.Errorf("%s (from envar %s=%q)", err, env, envar)
+				}
+				return nil
 			}
-			return nil
 		}
 	}
-	if v.Default != "" {
+	if v.HasDefault {
 		return v.Parse(ScanFromTokens(Token{Type: FlagValueToken, Value: v.Default}), v.Target)
 	}
 	return nil
@@ -376,9 +404,11 @@ type Positional = Value
 type Flag struct {
 	*Value
 	Group       *Group // Logical grouping when displaying. May also be used by configuration loaders to group options logically.
-	Xor         string
+	Xor         []string
+	And         []string
 	PlaceHolder string
-	Env         string
+	Envs        []string
+	Aliases     []string
 	Short       rune
 	Hidden      bool
 	Negated     bool
@@ -405,20 +435,23 @@ func (f *Flag) FormatPlaceHolder() string {
 	if f.Value.IsSlice() && f.Value.Tag.Sep != -1 {
 		tail += string(f.Value.Tag.Sep) + "..."
 	}
-	if f.Default != "" {
+	if f.PlaceHolder != "" {
+		return f.PlaceHolder + tail
+	}
+	if f.HasDefault {
 		if f.Value.Target.Kind() == reflect.String {
 			return strconv.Quote(f.Default) + tail
 		}
 		return f.Default + tail
-	}
-	if f.PlaceHolder != "" {
-		return f.PlaceHolder + tail
 	}
 	if f.Value.IsMap() {
 		if f.Value.Tag.MapSep != -1 {
 			tail = string(f.Value.Tag.MapSep) + "..."
 		}
 		return "KEY=VALUE" + tail
+	}
+	if f.Tag != nil && f.Tag.TypeName != "" {
+		return strings.ToUpper(dashedString(f.Tag.TypeName)) + tail
 	}
 	return strings.ToUpper(f.Name) + tail
 }
@@ -469,6 +502,9 @@ func reflectValueIsZero(v reflect.Value) bool {
 	default:
 		// This should never happens, but will act as a safeguard for
 		// later, as a default value doesn't makes sense here.
-		panic(&reflect.ValueError{"reflect.Value.IsZero", v.Kind()})
+		panic(&reflect.ValueError{
+			Method: "reflect.Value.IsZero",
+			Kind:   v.Kind(),
+		})
 	}
 }
