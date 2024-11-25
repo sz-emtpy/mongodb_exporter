@@ -19,7 +19,7 @@ require (
 	github.com/prometheus/client_model v0.2.0
 	github.com/shirou/gopsutil v3.21.8+incompatible // indirect
 	github.com/sirupsen/logrus v1.8.1
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.10.0
 	github.com/tklauser/go-sysconf v0.3.9 // indirect
 	go.mongodb.org/mongo-driver v1.7.2
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
@@ -54,5 +54,5 @@ require (
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6 // indirect
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
