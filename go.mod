@@ -8,7 +8,7 @@ go 1.17
 require (
 	github.com/AlekSi/pointer v1.1.0
 	github.com/StackExchange/wmi v1.2.1 // indirect
-	github.com/alecthomas/kong v0.2.17
+	github.com/alecthomas/kong v1.6.0
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
 	github.com/klauspost/compress v1.13.5 // indirect
